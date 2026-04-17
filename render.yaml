@@ -1,19 +1,47 @@
 services:
   - type: web
-    name: daanarx-backend
+    name: daanarx-api-gateway
     runtime: node
-    plan: starter
+    plan: free
     region: oregon
-    buildCommand: npm install && npm run build
-    startCommand: npm start
+    branch: main
+    autoDeploy: true
+    buildCommand: cd gateway && npm install && npm run build
+    startCommand: cd gateway && npm start
     healthCheckPath: /health
     envVars:
-      - key: NODE_ENV
-        value: production
       - key: PORT
         value: 4000
+      - key: NODE_ENV
+        value: production
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: AUTH_SERVICE_URL
+        value: https://daanarx-auth-service.onrender.com
+      - key: INVENTORY_SERVICE_URL
+        value: https://daanarx-inventory-service.onrender.com
+      - key: TRANSACTION_SERVICE_URL
+        value: https://daanarx-transaction-service.onrender.com
+      - key: NOTIFICATION_SERVICE_URL
+        value: https://daanarx-notification-service.onrender.com
+
+  - type: web
+    name: daanarx-auth-service
+    runtime: node
+    plan: free
+    region: oregon
+    branch: main
+    autoDeploy: true
+    buildCommand: cd services/auth && npm install && npm run build
+    startCommand: cd services/auth && npm start
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 3001
+      - key: NODE_ENV
+        value: production
       - key: JWT_SECRET
-        generateValue: true
+        sync: false
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
@@ -23,3 +51,80 @@ services:
       - key: ALLOWED_ORIGINS
         sync: false
 
+  - type: web
+    name: daanarx-inventory-service
+    runtime: node
+    plan: free
+    region: oregon
+    branch: main
+    autoDeploy: true
+    buildCommand: cd services/inventory && npm install && npm run build
+    startCommand: cd services/inventory && npm start
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 3002
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+
+  - type: web
+    name: daanarx-transaction-service
+    runtime: node
+    plan: free
+    region: oregon
+    branch: main
+    autoDeploy: true
+    buildCommand: cd services/transaction && npm install && npm run build
+    startCommand: cd services/transaction && npm start
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 3003
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+
+  - type: web
+    name: daanarx-notification-service
+    runtime: node
+    plan: free
+    region: oregon
+    branch: main
+    autoDeploy: true
+    buildCommand: cd services/notification && npm install && npm run build
+    startCommand: cd services/notification && npm start
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 3004
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
