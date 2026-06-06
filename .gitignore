@@ -38,3 +38,8 @@ coverage/
 tmp/
 temp/
 
+
+# Vendor folder: ALWAYS include even though dist/ is in dist pattern
+!vendor/
+!vendor/**/dist/
+!vendor/**/dist/**

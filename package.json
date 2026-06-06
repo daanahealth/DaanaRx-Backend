@@ -14,7 +14,7 @@
   "author": "DaanaRx Team",
   "license": "MIT",
   "dependencies": {
-    "@daana-health/inventory-core": "file:../daana-inventory/packages/inventory-core",
+    "@daana-health/inventory-core": "file:./vendor/inventory-core",
     "@supabase/supabase-js": "^2.45.0",
     "axios": "^1.7.0",
     "cors": "^2.8.5",
