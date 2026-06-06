@@ -7,6 +7,9 @@ import locationRoutes from './routes/locations';
 import lotRoutes from './routes/lots';
 import unitRoutes from './routes/units';
 import statsRoutes from './routes/stats';
+// Added by feature/be-contract-patch — standalone router for GET /items/next-code.
+// Coexists with routes/items.ts (feature/be-items-api) since paths don't overlap.
+import itemsNextCodeRoutes from './routes/items-next-code';
 
 dotenv.config();
 
@@ -29,6 +32,7 @@ app.use('/drugs', drugRoutes);
 app.use('/locations', locationRoutes);
 app.use('/lots', lotRoutes);
 app.use('/units', unitRoutes);
+app.use('/items', itemsNextCodeRoutes);
 app.use('/', statsRoutes);
 app.listen(PORT, () => console.log(`Inventory service running on port ${PORT}`));
 
