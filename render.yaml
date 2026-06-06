@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: daanarx-api-gateway
+    name: daanahealth-gateway
     runtime: node
     plan: free
     region: oregon
@@ -17,16 +17,16 @@ services:
       - key: ALLOWED_ORIGINS
         sync: false
       - key: AUTH_SERVICE_URL
-        value: https://daanarx-auth-service.onrender.com
+        value: https://daanahealth-auth.onrender.com
       - key: INVENTORY_SERVICE_URL
-        value: https://daanarx-inventory-service.onrender.com
+        value: https://daanahealth-inventory.onrender.com
       - key: TRANSACTION_SERVICE_URL
-        value: https://daanarx-transaction-service.onrender.com
+        value: https://daanahealth-transaction.onrender.com
       - key: NOTIFICATION_SERVICE_URL
-        value: https://daanarx-notification-service.onrender.com
+        value: https://daanahealth-notification.onrender.com
 
   - type: web
-    name: daanarx-auth-service
+    name: daanahealth-auth
     runtime: node
     plan: free
     region: oregon
@@ -52,7 +52,7 @@ services:
         sync: false
 
   - type: web
-    name: daanarx-inventory-service
+    name: daanahealth-inventory
     runtime: node
     plan: free
     region: oregon
@@ -78,7 +78,7 @@ services:
         sync: false
 
   - type: web
-    name: daanarx-transaction-service
+    name: daanahealth-transaction
     runtime: node
     plan: free
     region: oregon
@@ -104,7 +104,7 @@ services:
         sync: false
 
   - type: web
-    name: daanarx-notification-service
+    name: daanahealth-notification
     runtime: node
     plan: free
     region: oregon
