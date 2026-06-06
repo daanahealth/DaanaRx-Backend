@@ -8,6 +8,9 @@ import lotRoutes from './routes/lots';
 import unitRoutes from './routes/units';
 import statsRoutes from './routes/stats';
 import itemRoutes from './routes/items';
+// Standalone router for GET /items/next-code. Must mount BEFORE itemRoutes
+// so /items/next-code matches here instead of itemRoutes' GET /:id catch-all.
+import itemsNextCodeRoutes from './routes/items-next-code';
 
 dotenv.config();
 
@@ -30,6 +33,7 @@ app.use('/drugs', drugRoutes);
 app.use('/locations', locationRoutes);
 app.use('/lots', lotRoutes);
 app.use('/units', unitRoutes);
+app.use('/items', itemsNextCodeRoutes);
 app.use('/items', itemRoutes);
 app.use('/', statsRoutes);
 app.listen(PORT, () => console.log(`Inventory service running on port ${PORT}`));

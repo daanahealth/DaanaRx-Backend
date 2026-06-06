@@ -158,8 +158,239 @@ function handleTransitionError(res: Response, err: unknown): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Current-cart resolution (added by feature/be-contract-patch)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve (or create) the caller's "current" cart.
+ *
+ * Definition of "current": the caller's most-recent cart whose status is
+ * `active` or `pending_approval` (i.e. open + not yet decided) and whose
+ * `expires_at` is in the future. Newest `expires_at` wins so that a freshly
+ * touched cart is always preferred — the cart-add path bumps `expires_at` on
+ * every add, so this rule converges on the cart the user is actively editing.
+ *
+ * If no such cart exists this function lazily creates a fresh `active` cart
+ * with a 24h TTL and returns it. Used by GET /carts/current and the
+ * POST /carts/current/items alias.
+ */
+async function resolveCurrentCart(userId: string): Promise<any> {
+  const nowIso = new Date().toISOString();
+  const { data: existing, error } = await supabaseServer
+    .from('carts')
+    .select('*')
+    .eq('owner_id', userId)
+    .in('status', ['active', 'pending_approval'])
+    .gt('expires_at', nowIso)
+    .order('expires_at', { ascending: false })
+    .limit(1);
+  if (error) throw new Error(`Failed to resolve current cart: ${error.message}`);
+  if (existing && existing.length > 0) return existing[0];
+
+  // Auto-create.
+  const { data: created, error: createErr } = await supabaseServer
+    .from('carts')
+    .insert({
+      owner_id: userId,
+      status: 'active',
+      expires_at: newExpiry(),
+    })
+    .select('*')
+    .single();
+  if (createErr || !created) {
+    throw new Error(`Failed to auto-create cart: ${createErr?.message}`);
+  }
+  return created;
+}
+
+// ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
+
+/**
+ * GET /carts/current
+ * Returns the caller's open cart (auto-creating one if none exists).
+ * MUST be registered before GET /:id so Express doesn't treat "current"
+ * as a cart id.
+ *
+ * Contract: matches the FE checkout-cart's optimistic-add flow — the FE
+ * calls this on cart-sidebar mount to discover an existing cart or seed
+ * a fresh one, then chains POST /carts/current/items.
+ */
+router.get('/current', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const cart = await resolveCurrentCart(user.userId);
+    const items = await getCartItems(cart.id);
+    res.json({
+      id: cart.id,
+      owner_id: cart.owner_id,
+      status: cart.status,
+      submitted_at: cart.submitted_at,
+      decided_at: cart.decided_at,
+      decided_by: cart.decided_by,
+      expires_at: cart.expires_at,
+      created_at: cart.created_at,
+      items,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /carts?status=pending_approval
+ * Superadmin only. Lists all carts in the given status across the system,
+ * newest first, with the owner id and an item count attached.
+ *
+ * Used by the FE checkout-cart's "Pending Approvals" tab. Closes the contract
+ * drift documented in docs/merge-strategy.md §4.
+ */
+router.get('/', requireAuth, requireRole('superadmin'), async (req: Request, res: Response) => {
+  try {
+    const status = (req.query.status as string | undefined) ?? 'pending_approval';
+    const allowed = ['active', 'pending_approval', 'approved', 'rejected', 'expired'];
+    if (!allowed.includes(status)) {
+      return res.status(400).json({ error: `status must be one of: ${allowed.join(', ')}` });
+    }
+    const { data, error } = await supabaseServer
+      .from('carts')
+      .select('*, cart_items(item_id)')
+      .eq('status', status)
+      .order('submitted_at', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false });
+    if (error) throw new Error(error.message);
+    const rows = (data || []).map((c: any) => ({
+      id: c.id,
+      owner_id: c.owner_id,
+      status: c.status,
+      submitted_at: c.submitted_at,
+      decided_at: c.decided_at,
+      decided_by: c.decided_by,
+      expires_at: c.expires_at,
+      created_at: c.created_at,
+      item_count: Array.isArray(c.cart_items) ? c.cart_items.length : 0,
+    }));
+    res.json({ carts: rows, count: rows.length, status });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /carts/current/items
+ * Convenience alias for POST /carts/:id/items, resolving (or auto-creating)
+ * the caller's current cart first. Body: { item_id }.
+ *
+ * Concurrent-conflict semantics, expired-override gates, and transaction
+ * logging match POST /:id/items byte-for-byte.
+ *
+ * MUST be registered before POST /:id/items so Express does not treat
+ * "current" as a cart id.
+ */
+router.post('/current/items', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const itemId: string | undefined = req.body?.item_id;
+    if (!itemId) return res.status(400).json({ error: 'item_id required' });
+
+    const overrideFlag = req.query.override === 'true' || req.query.override === '1';
+    const overrideNote = (req.query.note as string | undefined) || undefined;
+
+    const cart = await resolveCurrentCart(user.userId);
+    if (cart.status !== 'active' && cart.status !== 'pending_approval') {
+      return res.status(409).json({
+        error: `Cart is ${cart.status} and cannot accept new items`,
+      });
+    }
+
+    const item = await getItem(itemId);
+    if (!item) return res.status(404).json({ error: 'Item not found' });
+
+    if (item.status === 'expired') {
+      if (!isSuperadmin(user)) {
+        return res.status(403).json({
+          error: 'Expired medications cannot be added by restricted users',
+        });
+      }
+      if (!overrideFlag) {
+        return res.status(403).json({
+          error: 'Expired medication requires superadmin override with a note',
+          override_required: true,
+        });
+      }
+      if (!overrideNote || overrideNote.trim().length === 0) {
+        return res.status(400).json({
+          error: 'A mandatory note is required to override an expired medication',
+          override_required_note: true,
+        });
+      }
+    } else if (item.status !== 'active') {
+      return res.status(409).json({
+        error: 'Item is not available (already reserved, checked out, removed, or expired)',
+        current_status: item.status,
+      });
+    }
+
+    const targetStatus: ItemStatus = isSuperadmin(user) ? 'in_cart' : 'pending_approval';
+    const fromStatus: ItemStatus = item.status === 'expired' ? 'expired' : 'active';
+
+    let updated;
+    try {
+      updated = await casItemStatus(itemId, fromStatus, targetStatus, user.userId);
+    } catch (err) {
+      if (handleTransitionError(res, err)) return;
+      throw err;
+    }
+    if (!updated) {
+      return res.status(409).json({
+        error: 'This medication has just been checked out. Please refresh and select another unit.',
+        conflict: 'concurrent_checkout',
+      });
+    }
+
+    const { error: ciErr } = await supabaseServer
+      .from('cart_items')
+      .insert({ cart_id: cart.id, item_id: itemId, added_at: new Date().toISOString() });
+    if (ciErr) {
+      await supabaseServer
+        .from('items')
+        .update({ status: fromStatus })
+        .eq('id', itemId)
+        .eq('status', targetStatus);
+      throw new Error(`Failed to add cart_item row: ${ciErr.message}`);
+    }
+
+    await supabaseServer
+      .from('carts')
+      .update({ expires_at: newExpiry() })
+      .eq('id', cart.id);
+
+    const action: TransactionAction = item.status === 'expired'
+      ? 'expired_override'
+      : 'edit';
+    await logTransaction({
+      itemId,
+      action,
+      actorId: user.userId,
+      oldValue: { status: fromStatus },
+      newValue: { status: targetStatus },
+      reason: item.status === 'expired' ? 'expired_override_add' : 'cart_add',
+      note: item.status === 'expired' ? (overrideNote ?? null) : null,
+    });
+
+    res.status(201).json({
+      cart_id: cart.id,
+      item_id: itemId,
+      status: targetStatus,
+      added_at: new Date().toISOString(),
+      ...(item.status === 'expired' ? { override_note: overrideNote } : {}),
+    });
+  } catch (err: any) {
+    if (handleTransitionError(res, err)) return;
+    res.status(500).json({ error: err.message });
+  }
+});
 
 /**
  * POST /carts

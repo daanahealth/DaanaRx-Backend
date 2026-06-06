@@ -4,6 +4,65 @@ import { supabaseServer } from '../utils/supabase';
 
 const router = Router();
 
+// ---------------------------------------------------------------------------
+// Core-schema locations (added by feature/be-contract-patch).
+//
+// The existing endpoints below target the LEGACY `locations` table
+// (location_id / clinic_id / name / temp). The new core schema introduced
+// by migrations/002_core_inventory_platform.sql defines `locations` with
+// columns (id, code, specialty, capacity, item_type_id, deactivated_at).
+// FE feature/fe-inventory-table calls GET /api/locations expecting the
+// NEW shape. We mount the new endpoint at `/v2` so the legacy contract is
+// preserved during migration; the gateway / FE will collapse these to a
+// single `/locations` once the legacy table is retired.
+//
+// Closes the `/api/locations` contract drift documented in
+// docs/merge-strategy.md §4.
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /locations/v2
+ * Lists active locations (deactivated_at IS NULL) from the core schema.
+ *
+ * Query params:
+ *   - type_id  — filter to a single item_type_id
+ *   - q        — substring (case-insensitive) on `code` or `specialty`
+ *
+ * Response: { locations: [{ id, code, specialty, capacity, item_type_id }] }
+ */
+router.get('/v2', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const typeId = req.query.type_id as string | undefined;
+    const q = (req.query.q as string | undefined)?.trim();
+
+    let query = supabaseServer
+      .from('locations')
+      .select('id, code, specialty, capacity, item_type_id, deactivated_at')
+      .is('deactivated_at', null);
+
+    if (typeId) query = query.eq('item_type_id', typeId);
+    if (q && q.length > 0) {
+      // Match either code OR specialty substring, case-insensitive.
+      query = query.or(`code.ilike.%${q}%,specialty.ilike.%${q}%`);
+    }
+
+    query = query.order('code', { ascending: true });
+
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+    const rows = (data ?? []).map((r: any) => ({
+      id: r.id,
+      code: r.code,
+      specialty: r.specialty,
+      capacity: r.capacity,
+      item_type_id: r.item_type_id,
+    }));
+    return res.json({ locations: rows });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message ?? 'Internal error' });
+  }
+});
+
 function formatLocation(location: any) {
   const temp = location.temp === 'room temp' ? 'room_temp' : location.temp;
   return {

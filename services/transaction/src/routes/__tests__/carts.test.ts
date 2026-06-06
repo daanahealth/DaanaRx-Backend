@@ -433,3 +433,186 @@ test('assertTransition rejects identity and invalid transitions', () => {
   assertTransition('pending_approval', 'checked_out');
   assertTransition('expired', 'checked_out'); // override path
 });
+
+// ---------------------------------------------------------------------------
+// feature/be-contract-patch additions
+//
+// Tests for the three new cart endpoints introduced by the contract patch.
+// Mirror the production helpers from services/transaction/src/routes/carts.ts
+// directly so the file stays self-contained (same ESM/CJS workaround the rest
+// of this file uses).
+// ---------------------------------------------------------------------------
+
+const CART_TTL_MS = 24 * 60 * 60 * 1000;
+function newExpiry(): string {
+  return new Date(Date.now() + CART_TTL_MS).toISOString();
+}
+
+/**
+ * Mirror of resolveCurrentCart() in carts.ts. Reads from the in-memory tables
+ * map directly so we can exercise the auto-create semantics without needing
+ * a `gt()` / `limit()` operator on the FakeQuery.
+ */
+async function resolveCurrentCart(userId: string): Promise<Row> {
+  const now = Date.now();
+  const candidates = Array.from(tables.carts.values())
+    .filter(
+      (c) =>
+        c.owner_id === userId &&
+        (c.status === 'active' || c.status === 'pending_approval') &&
+        new Date(c.expires_at as string).getTime() > now,
+    )
+    .sort(
+      (a, b) =>
+        new Date(b.expires_at as string).getTime() -
+        new Date(a.expires_at as string).getTime(),
+    );
+  if (candidates.length > 0) return candidates[0];
+
+  const id = `cart-${Math.random().toString(36).slice(2, 9)}`;
+  const created: Row = {
+    id,
+    owner_id: userId,
+    status: 'active',
+    submitted_at: null,
+    decided_at: null,
+    decided_by: null,
+    expires_at: newExpiry(),
+    created_at: new Date().toISOString(),
+  };
+  tables.carts.set(id, created);
+  return created;
+}
+
+test('GET /carts/current returns existing open cart for owner', async () => {
+  reset();
+  seedCart('cart-mine', 'user-1', 'active');
+  const cart = await resolveCurrentCart('user-1');
+  assert.equal(cart.id, 'cart-mine');
+  assert.equal(cart.owner_id, 'user-1');
+  // Tables size unchanged (no auto-create).
+  assert.equal(tables.carts.size, 1);
+});
+
+test('GET /carts/current auto-creates a cart when none exists', async () => {
+  reset();
+  // No carts for this user — should auto-create.
+  const cart = await resolveCurrentCart('user-fresh');
+  assert.ok(cart.id, 'expected an id on the created cart');
+  assert.equal(cart.owner_id, 'user-fresh');
+  assert.equal(cart.status, 'active');
+  assert.ok(new Date(cart.expires_at as string).getTime() > Date.now(), 'expires_at in future');
+  assert.equal(tables.carts.size, 1);
+});
+
+test('GET /carts/current skips expired/decided carts and creates a fresh one', async () => {
+  reset();
+  // Decided cart should be ignored.
+  const decided = seedCart('cart-decided', 'user-2', 'approved');
+  decided.decided_at = new Date().toISOString();
+  // Already-expired (past expires_at) active cart should also be ignored.
+  const stale = seedCart('cart-stale', 'user-2', 'active');
+  stale.expires_at = new Date(Date.now() - 60_000).toISOString();
+
+  const cart = await resolveCurrentCart('user-2');
+  assert.notEqual(cart.id, 'cart-decided');
+  assert.notEqual(cart.id, 'cart-stale');
+  assert.equal(cart.owner_id, 'user-2');
+  assert.equal(cart.status, 'active');
+});
+
+test('GET /carts/current prefers the cart with the latest expires_at', async () => {
+  reset();
+  const a = seedCart('cart-a', 'user-3', 'active');
+  a.expires_at = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // +1h
+  const b = seedCart('cart-b', 'user-3', 'pending_approval');
+  b.expires_at = new Date(Date.now() + 23 * 60 * 60 * 1000).toISOString(); // +23h
+
+  const cart = await resolveCurrentCart('user-3');
+  assert.equal(cart.id, 'cart-b', 'latest expires_at wins');
+});
+
+/**
+ * Mirror of the GET /carts?status= list endpoint in carts.ts. Reads
+ * directly from the tables map; sort order matches the production
+ * .order('submitted_at',...).order('created_at',...) semantics.
+ */
+async function listCartsByStatus(status: string) {
+  const allowed = ['active', 'pending_approval', 'approved', 'rejected', 'expired'];
+  if (!allowed.includes(status)) {
+    return { status: 400, body: { error: 'invalid status' } };
+  }
+  const rows: Row[] = Array.from(tables.carts.values())
+    .filter((c) => c.status === status)
+    .map((c) => ({
+      ...c,
+      item_count: tables.cart_items.filter((ci) => ci.cart_id === c.id).length,
+    } as Row))
+    .sort((a: Row, b: Row) => {
+      const sa = a.submitted_at ? new Date(a.submitted_at as string).getTime() : 0;
+      const sb = b.submitted_at ? new Date(b.submitted_at as string).getTime() : 0;
+      if (sa !== sb) return sb - sa;
+      return new Date(b.created_at as string).getTime() - new Date(a.created_at as string).getTime();
+    });
+  return {
+    status: 200,
+    body: { carts: rows, count: rows.length, status },
+  };
+}
+
+test('GET /carts?status=pending_approval lists pending carts with item counts, newest first', async () => {
+  reset();
+  // Seed three carts: two pending_approval, one approved (must be excluded).
+  const older = seedCart('cart-older', 'user-r1', 'pending_approval');
+  older.submitted_at = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // 1h ago
+  const newer = seedCart('cart-newer', 'user-r2', 'pending_approval');
+  newer.submitted_at = new Date(Date.now() - 60_000).toISOString(); // 1m ago
+  seedCart('cart-approved', 'user-r3', 'approved');
+
+  seedItem('item-1');
+  seedItem('item-2');
+  seedItem('item-3');
+  tables.cart_items.push(
+    { cart_id: 'cart-older', item_id: 'item-1', added_at: new Date().toISOString() },
+    { cart_id: 'cart-newer', item_id: 'item-2', added_at: new Date().toISOString() },
+    { cart_id: 'cart-newer', item_id: 'item-3', added_at: new Date().toISOString() },
+  );
+
+  const res = await listCartsByStatus('pending_approval');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.count, 2, 'approved cart must be excluded');
+  // Newest first by submitted_at.
+  assert.equal(res.body.carts[0].id, 'cart-newer');
+  assert.equal(res.body.carts[1].id, 'cart-older');
+  // Item counts attached.
+  assert.equal(res.body.carts[0].item_count, 2);
+  assert.equal(res.body.carts[1].item_count, 1);
+});
+
+test('GET /carts?status=invalid returns 400', async () => {
+  reset();
+  const res = await listCartsByStatus('bogus_status');
+  assert.equal(res.status, 400);
+});
+
+test('POST /carts/current/items resolves cart then adds via the same CAS as POST /:id/items', async () => {
+  reset();
+  seedItem('item-cur');
+  // No pre-existing cart — current-items must auto-create then add.
+
+  // First resolve the current cart (mirrors what the production handler does
+  // before delegating into the cart-add path).
+  const cart = await resolveCurrentCart('user-r-cur');
+
+  const res = await addItemToCart({
+    user: { userId: 'user-r-cur', userRole: 'restricted_user' },
+    cartId: cart.id,
+    itemId: 'item-cur',
+  });
+
+  assert.equal(res.status, 201);
+  assert.equal(res.body.status, 'pending_approval');
+  assert.equal(tables.items.get('item-cur')!.status, 'pending_approval');
+  assert.equal(tables.cart_items.length, 1);
+  assert.equal(tables.cart_items[0].cart_id, cart.id);
+});
