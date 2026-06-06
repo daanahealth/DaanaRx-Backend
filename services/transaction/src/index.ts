@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { authMiddleware } from './middleware/auth';
 import transactionRoutes from './routes/transactions';
+import cartsRoutes from './routes/carts';
 
 dotenv.config();
 
@@ -21,6 +22,7 @@ app.use(authMiddleware);
 
 app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'transaction' }));
 
+app.use('/carts', cartsRoutes);
 app.use('/', transactionRoutes);
 
 app.listen(PORT, () => console.log(`Transaction service running on port ${PORT}`));
