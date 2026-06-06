@@ -1,3 +1,4 @@
+"use strict";
 // Validator framework.
 //
 // Domain packs register validators against item-type names. The platform
@@ -5,12 +6,17 @@
 // separate ajv-based runtime), and THEN invokes every registered validator
 // for the item's type. Validators are pure functions; they may inspect any
 // part of the item but must not perform I/O.
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ok = exports.ValidatorRegistry = void 0;
+exports.fail = fail;
 /**
  * Registry of (itemTypeName -> Validator[]) pairs. Domain packs call
  * `register(itemTypeName, validator)` at module init time.
  */
-export class ValidatorRegistry {
-    byType = new Map();
+class ValidatorRegistry {
+    constructor() {
+        this.byType = new Map();
+    }
     register(itemTypeName, validator) {
         const list = this.byType.get(itemTypeName) ?? [];
         list.push(validator);
@@ -39,14 +45,15 @@ export class ValidatorRegistry {
         return { ok: issues.length === 0, issues };
     }
 }
+exports.ValidatorRegistry = ValidatorRegistry;
 /**
  * Helper: build a successful ValidationResult.
  */
-export const ok = { ok: true, issues: [] };
+exports.ok = { ok: true, issues: [] };
 /**
  * Helper: build a failing ValidationResult from one or more issues.
  */
-export function fail(...issues) {
+function fail(...issues) {
     return { ok: false, issues };
 }
 //# sourceMappingURL=validators.js.map

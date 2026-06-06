@@ -1,3 +1,4 @@
+"use strict";
 // First-Expiry-First-Out comparator.
 //
 // Spec (Check Out > FEFO Logic and Sort Order):
@@ -5,6 +6,9 @@
 //      AFTER all dated units — never picked over an expiring one).
 //   2. Tiebreaker: created_at (date received) ascending.
 //   3. Final tiebreaker: unit_code ascending (string compare).
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.compareFEFO = compareFEFO;
+exports.sortFEFO = sortFEFO;
 /**
  * Total order over items implementing FEFO.
  *
@@ -13,7 +17,7 @@
  *
  * Safe to use directly with Array.prototype.sort.
  */
-export function compareFEFO(a, b) {
+function compareFEFO(a, b) {
     // 1. expiry_date ascending, nulls last
     const aExp = a.expiryDate;
     const bExp = b.expiryDate;
@@ -40,7 +44,7 @@ export function compareFEFO(a, b) {
 /**
  * Convenience wrapper: returns a new array sorted by FEFO. Does not mutate input.
  */
-export function sortFEFO(items) {
+function sortFEFO(items) {
     return [...items].sort(compareFEFO);
 }
 //# sourceMappingURL=fefo.js.map

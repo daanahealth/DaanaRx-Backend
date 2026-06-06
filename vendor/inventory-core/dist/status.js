@@ -1,3 +1,4 @@
+"use strict";
 // Inventory item status state machine.
 // The allowed transitions encode the rules in the MASS MVP spec:
 //   active -> in_cart | pending_approval | checked_out | removed | expired
@@ -10,11 +11,18 @@
 // Concurrent-checkout safety, role gating, and audit logging are enforced at
 // the RPC layer (SQL SECURITY DEFINER functions). This module is the pure
 // in-memory state machine that the API + UI consult.
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.InvalidStatusTransitionError = exports.allowedTransitions = void 0;
+exports.isActiveStatus = isActiveStatus;
+exports.isTerminalStatus = isTerminalStatus;
+exports.isSearchableForRestrictedUser = isSearchableForRestrictedUser;
+exports.assertTransition = assertTransition;
+exports.canTransition = canTransition;
 /**
  * Statuses an item is allowed to transition to from each origin status.
  * Empty array = terminal state.
  */
-export const allowedTransitions = {
+exports.allowedTransitions = {
     active: ["in_cart", "pending_approval", "checked_out", "removed", "expired"],
     in_cart: ["active", "checked_out", "removed"],
     pending_approval: ["active", "checked_out", "removed"],
@@ -29,25 +37,23 @@ export const allowedTransitions = {
  * Note: in_cart and pending_approval items are still PHYSICALLY in the bin,
  * but spec excludes them from "available for checkout" results.
  */
-export function isActiveStatus(s) {
+function isActiveStatus(s) {
     return s === "active" || s === "in_cart" || s === "pending_approval";
 }
 /**
  * True for statuses that mean the item is no longer in the bin (or never will be).
  */
-export function isTerminalStatus(s) {
+function isTerminalStatus(s) {
     return s === "checked_out" || s === "removed";
 }
 /**
  * True if the unit is available to a restricted user's search.
  * Only "active" qualifies — in_cart/pending_approval are hidden, expired flagged.
  */
-export function isSearchableForRestrictedUser(s) {
+function isSearchableForRestrictedUser(s) {
     return s === "active";
 }
-export class InvalidStatusTransitionError extends Error {
-    from;
-    to;
+class InvalidStatusTransitionError extends Error {
     constructor(from, to) {
         super(`Invalid item status transition: ${from} -> ${to}`);
         this.name = "InvalidStatusTransitionError";
@@ -55,16 +61,17 @@ export class InvalidStatusTransitionError extends Error {
         this.to = to;
     }
 }
+exports.InvalidStatusTransitionError = InvalidStatusTransitionError;
 /**
  * Throws InvalidStatusTransitionError if the transition is not allowed.
  * Identity transitions (from === to) are also rejected — they should not
  * produce a transaction row.
  */
-export function assertTransition(from, to) {
+function assertTransition(from, to) {
     if (from === to) {
         throw new InvalidStatusTransitionError(from, to);
     }
-    const allowed = allowedTransitions[from];
+    const allowed = exports.allowedTransitions[from];
     if (!allowed.includes(to)) {
         throw new InvalidStatusTransitionError(from, to);
     }
@@ -73,9 +80,9 @@ export function assertTransition(from, to) {
  * Pure-function predicate version of assertTransition for use in
  * UI guards (disabling buttons, etc.).
  */
-export function canTransition(from, to) {
+function canTransition(from, to) {
     if (from === to)
         return false;
-    return allowedTransitions[from].includes(to);
+    return exports.allowedTransitions[from].includes(to);
 }
 //# sourceMappingURL=status.js.map

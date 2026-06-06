@@ -1,3 +1,4 @@
+"use strict";
 // Generic code-generator interface + template rendering helper + registry.
 //
 // Templates use brace-delimited placeholders:
@@ -14,18 +15,23 @@
 // Counters are managed atomically by the platform (see code_counters SQL
 // table + RPC). This module only renders strings; it does NOT allocate
 // counter values.
-export class CodeTemplateError extends Error {
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.InMemoryCodeGeneratorRegistry = exports.CodeTemplateError = void 0;
+exports.renderCodeTemplate = renderCodeTemplate;
+exports.createTemplateCodeGenerator = createTemplateCodeGenerator;
+class CodeTemplateError extends Error {
     constructor(message) {
         super(message);
         this.name = "CodeTemplateError";
     }
 }
+exports.CodeTemplateError = CodeTemplateError;
 const COUNTER_PADDED_RE = /^counter:0(\d+)d$/;
 /**
  * Render a code template against a context. Pure function.
  * Throws CodeTemplateError on unknown placeholders or malformed counter specs.
  */
-export function renderCodeTemplate(template, ctx) {
+function renderCodeTemplate(template, ctx) {
     return template.replace(/\{([^{}]+)\}/g, (_, raw) => {
         const token = raw.trim();
         if (token === "LOCATION")
@@ -61,7 +67,7 @@ export function renderCodeTemplate(template, ctx) {
  * Eagerly validates the template syntax with a probe context so typos surface
  * at registration time rather than at first check-in.
  */
-export function createTemplateCodeGenerator(format) {
+function createTemplateCodeGenerator(format) {
     const probe = {
         itemTypeId: "probe",
         itemTypeName: "PROBE",
@@ -88,8 +94,10 @@ export function createTemplateCodeGenerator(format) {
     };
 }
 /** Default in-memory CodeGeneratorRegistry. */
-export class InMemoryCodeGeneratorRegistry {
-    byType = new Map();
+class InMemoryCodeGeneratorRegistry {
+    constructor() {
+        this.byType = new Map();
+    }
     register(itemTypeId, generator) {
         this.byType.set(itemTypeId, generator);
     }
@@ -97,4 +105,5 @@ export class InMemoryCodeGeneratorRegistry {
         return this.byType.get(itemTypeId);
     }
 }
+exports.InMemoryCodeGeneratorRegistry = InMemoryCodeGeneratorRegistry;
 //# sourceMappingURL=code-generator.js.map
