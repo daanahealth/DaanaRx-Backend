@@ -7,6 +7,7 @@ import locationRoutes from './routes/locations';
 import lotRoutes from './routes/lots';
 import unitRoutes from './routes/units';
 import statsRoutes from './routes/stats';
+import itemRoutes from './routes/items';
 
 dotenv.config();
 
@@ -29,6 +30,7 @@ app.use('/drugs', drugRoutes);
 app.use('/locations', locationRoutes);
 app.use('/lots', lotRoutes);
 app.use('/units', unitRoutes);
+app.use('/items', itemRoutes);
 app.use('/', statsRoutes);
 app.listen(PORT, () => console.log(`Inventory service running on port ${PORT}`));
 
