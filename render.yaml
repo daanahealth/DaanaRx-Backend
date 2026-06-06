@@ -128,3 +128,23 @@ services:
         sync: false
       - key: ALLOWED_ORIGINS
         sync: false
+
+  - type: web
+    name: daanahealth-bugs
+    runtime: node
+    plan: free
+    region: oregon
+    branch: main
+    autoDeploy: false
+    buildCommand: cd services/bugs-dashboard && npm install && npm run build
+    startCommand: cd services/bugs-dashboard && npm start
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 3005
+      - key: NODE_ENV
+        value: production
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false

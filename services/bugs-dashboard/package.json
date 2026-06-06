@@ -1,0 +1,14 @@
+{
+  "name": "daanahealth-bugs-dashboard",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "build": "tsc && cp -R public dist/",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}
