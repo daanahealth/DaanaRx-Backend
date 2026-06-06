@@ -5,7 +5,7 @@ services:
     plan: free
     region: oregon
     branch: main
-    autoDeploy: true
+    autoDeploy: false
     buildCommand: cd gateway && npm install && npm run build
     startCommand: cd gateway && npm start
     healthCheckPath: /health
@@ -31,7 +31,7 @@ services:
     plan: free
     region: oregon
     branch: main
-    autoDeploy: true
+    autoDeploy: false
     buildCommand: cd services/auth && npm install && npm run build
     startCommand: cd services/auth && npm start
     healthCheckPath: /health
@@ -57,7 +57,7 @@ services:
     plan: free
     region: oregon
     branch: main
-    autoDeploy: true
+    autoDeploy: false
     buildCommand: cd services/inventory && npm install && npm run build
     startCommand: cd services/inventory && npm start
     healthCheckPath: /health
@@ -83,7 +83,7 @@ services:
     plan: free
     region: oregon
     branch: main
-    autoDeploy: true
+    autoDeploy: false
     buildCommand: cd services/transaction && npm install && npm run build
     startCommand: cd services/transaction && npm start
     healthCheckPath: /health
@@ -109,7 +109,7 @@ services:
     plan: free
     region: oregon
     branch: main
-    autoDeploy: true
+    autoDeploy: false
     buildCommand: cd services/notification && npm install && npm run build
     startCommand: cd services/notification && npm start
     healthCheckPath: /health
