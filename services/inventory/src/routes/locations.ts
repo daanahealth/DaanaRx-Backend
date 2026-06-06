@@ -31,33 +31,33 @@ const router = Router();
  * Response: { locations: [{ id, code, specialty, capacity, item_type_id }] }
  */
 router.get('/v2', requireAuth, async (req: Request, res: Response) => {
+  // Reads from the legacy `locations` table (location_id, name, temp,
+  // clinic_id) and projects it into the core-platform shape that the FE
+  // dropdown consumes. Clinic-scoped: the bins shown to a user are only the
+  // ones belonging to their active clinic.
   try {
-    const typeId = req.query.type_id as string | undefined;
     const q = (req.query.q as string | undefined)?.trim();
+    const clinicId = (req as any).user?.activeClinicId || (req.query.clinic_id as string | undefined);
 
     let query = supabaseServer
       .from('locations')
-      .select('id, code, specialty, capacity, item_type_id, deactivated_at')
-      .is('deactivated_at', null);
+      .select('location_id, name, temp, clinic_id');
 
-    if (typeId) query = query.eq('item_type_id', typeId);
-    if (q && q.length > 0) {
-      // Match either code OR specialty substring, case-insensitive.
-      query = query.or(`code.ilike.%${q}%,specialty.ilike.%${q}%`);
-    }
-
-    query = query.order('code', { ascending: true });
+    if (clinicId) query = query.eq('clinic_id', clinicId);
+    if (q && q.length > 0) query = query.ilike('name', `%${q}%`);
+    query = query.order('name', { ascending: true });
 
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
     const rows = (data ?? []).map((r: any) => ({
-      id: r.id,
-      code: r.code,
-      specialty: r.specialty,
-      capacity: r.capacity,
-      item_type_id: r.item_type_id,
+      id: r.location_id,
+      code: r.name,
+      specialty: r.temp ?? null,
+      capacity: 50,
+      item_type_id: null,
     }));
-    return res.json({ locations: rows });
+    // Return as an array (matches what the FE LocationSuggestion expects)
+    return res.json(rows);
   } catch (err: any) {
     return res.status(500).json({ error: err.message ?? 'Internal error' });
   }
