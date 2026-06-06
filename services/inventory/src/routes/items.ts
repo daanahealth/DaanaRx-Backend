@@ -194,7 +194,7 @@ async function allocateNextCounter(typeId: string, locationCode: string): Promis
   const existing = await supabaseServer
     .from('code_counters')
     .select('next_value')
-    .eq('type_id', typeId)
+    .eq('item_type_id', typeId)
     .eq('location_code', locationCode)
     .maybeSingle();
   const current = existing.data?.next_value ?? 1;
@@ -202,11 +202,11 @@ async function allocateNextCounter(typeId: string, locationCode: string): Promis
     .from('code_counters')
     .upsert(
       {
-        type_id: typeId,
+        item_type_id: typeId,
         location_code: locationCode,
         next_value: current + 1,
       },
-      { onConflict: 'type_id,location_code' },
+      { onConflict: 'item_type_id,location_code' },
     )
     .select('next_value')
     .single();
