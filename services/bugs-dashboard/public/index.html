@@ -205,7 +205,9 @@
           },
           async fetchData() {
             try {
-              const r = await fetch('/api/feedback', { cache: 'no-store' });
+              // Relative path: resolves to /api/feedback when served directly,
+              // and to /bugs/api/feedback when served behind the gateway prefix.
+              const r = await fetch('api/feedback', { cache: 'no-store' });
               this.data = await r.json();
             } catch {
               // keep prior data on failure
