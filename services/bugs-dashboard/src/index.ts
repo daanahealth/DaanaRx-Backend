@@ -38,21 +38,41 @@ interface FeedbackRow {
 
 const FEEDBACK_CACHE: { at: number; rows: FeedbackRow[] } = { at: 0, rows: [] };
 const CACHE_TTL_MS = 10_000;
+// Hard ceiling on the upstream Supabase call. Without this, a slow/unreachable
+// Supabase (or a cold start) leaves the request — and the connection — hanging
+// indefinitely, which starves the tiny free-plan instance and makes even
+// /health unresponsive. Fail fast instead.
+const SUPABASE_TIMEOUT_MS = Number(process.env.SUPABASE_TIMEOUT_MS) || 8_000;
 
 async function fetchFeedback(): Promise<FeedbackRow[]> {
   if (Date.now() - FEEDBACK_CACHE.at < CACHE_TTL_MS) return FEEDBACK_CACHE.rows;
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error('Supabase is not configured (missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)');
+  }
   const url = `${SUPABASE_URL}/rest/v1/feedback?select=*&order=created_at.desc&limit=500`;
-  const res = await fetch(url, {
-    headers: {
-      apikey: SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-    },
-  });
-  if (!res.ok) throw new Error(`Supabase ${res.status}: ${await res.text()}`);
-  const rows = (await res.json()) as FeedbackRow[];
-  FEEDBACK_CACHE.at = Date.now();
-  FEEDBACK_CACHE.rows = rows;
-  return rows;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), SUPABASE_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      },
+      signal: ctrl.signal,
+    });
+    if (!res.ok) throw new Error(`Supabase ${res.status}: ${await res.text()}`);
+    const rows = (await res.json()) as FeedbackRow[];
+    FEEDBACK_CACHE.at = Date.now();
+    FEEDBACK_CACHE.rows = rows;
+    return rows;
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error(`Supabase request timed out after ${SUPABASE_TIMEOUT_MS}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function parseMessage(raw: string): { title: string; body: string } {
@@ -82,27 +102,40 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
   }
 
   if (url.pathname === '/api/feedback') {
+    let rows: FeedbackRow[];
+    let stale = false;
     try {
-      const rows = await fetchFeedback();
-      const enriched = rows.map((r) => ({
-        id: r.feedback_id,
-        type: r.feedback_type,
-        ...parseMessage(r.feedback_message || ''),
-        user_id: r.user_id,
-        clinic_id: r.clinic_id,
-        created_at: r.created_at,
-      }));
-      const payload = {
-        generated_at: new Date().toISOString(),
-        summary: summarize(rows),
-        items: enriched,
-      };
-      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify(payload));
+      rows = await fetchFeedback();
     } catch (err) {
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: String(err) }));
+      // Graceful degradation: if we ever fetched successfully, serve the last
+      // known-good snapshot rather than failing the whole dashboard. Only
+      // surface an error when we have nothing cached at all.
+      if (FEEDBACK_CACHE.rows.length > 0) {
+        rows = FEEDBACK_CACHE.rows;
+        stale = true;
+        console.error('[bugs-dashboard] serving stale feedback after fetch error:', String(err));
+      } else {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'feedback_unavailable', detail: String(err) }));
+        return;
+      }
     }
+    const enriched = rows.map((r) => ({
+      id: r.feedback_id,
+      type: r.feedback_type,
+      ...parseMessage(r.feedback_message || ''),
+      user_id: r.user_id,
+      clinic_id: r.clinic_id,
+      created_at: r.created_at,
+    }));
+    const payload = {
+      generated_at: new Date().toISOString(),
+      stale,
+      summary: summarize(rows),
+      items: enriched,
+    };
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify(payload));
     return;
   }
 
