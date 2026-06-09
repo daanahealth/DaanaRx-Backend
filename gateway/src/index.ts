@@ -81,6 +81,40 @@ app.get('/health', (_req, res) =>
   })
 );
 
+// Wake every downstream IN PARALLEL. On Render's free plan, services spin down
+// after ~15 min idle; the first request to each cold-starts (~12-30s). Without
+// this, the post-sign-in fan-out wakes them serially and the app appears hung.
+// The frontend fires this on the sign-in screen so they warm concurrently while
+// the user is authenticating. Fire-and-forget; never blocks app logic.
+const WARMUP_TARGETS: Record<string, string> = {
+  auth: AUTH_SERVICE_URL,
+  inventory: INVENTORY_SERVICE_URL,
+  transaction: TRANSACTION_SERVICE_URL,
+  notification: NOTIFICATION_SERVICE_URL,
+  bugs: BUGS_SERVICE_URL,
+};
+const WARMUP_TIMEOUT_MS = Number(process.env.WARMUP_TIMEOUT_MS) || 40_000;
+
+app.get('/warmup', async (_req, res) => {
+  const started = Date.now();
+  const results = await Promise.all(
+    Object.entries(WARMUP_TARGETS).map(async ([name, url]) => {
+      const t0 = Date.now();
+      try {
+        const r = await fetch(`${url}/health`, { signal: AbortSignal.timeout(WARMUP_TIMEOUT_MS) });
+        return [name, { ok: r.ok, status: r.status, ms: Date.now() - t0 }];
+      } catch (err: any) {
+        return [name, { ok: false, error: err?.name || err?.message || 'error', ms: Date.now() - t0 }];
+      }
+    }),
+  );
+  res.json({
+    warmedAt: new Date().toISOString(),
+    totalMs: Date.now() - started,
+    services: Object.fromEntries(results),
+  });
+});
+
 function makeResilientProxy(target: string, pathPrefix: string) {
   const proxy = createProxyMiddleware({
     target,
