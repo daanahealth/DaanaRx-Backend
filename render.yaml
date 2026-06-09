@@ -12,7 +12,7 @@ services:
     region: oregon
     branch: main
     autoDeploy: false
-    buildCommand: npm install && npm run build:consolidated
+    buildCommand: npm install --include=dev && npm run build:consolidated
     startCommand: npm run start:consolidated
     healthCheckPath: /health
     envVars:
