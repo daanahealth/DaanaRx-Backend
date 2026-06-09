@@ -252,24 +252,30 @@ function actorId(req: Request): string | null {
 
 router.post('/', requireAuth, async (req: Request, res: Response) => {
   try {
-    const { type_id, attributes, location_id, expiry_date } = req.body ?? {};
+    // Accept BOTH the id-based contract (type_id/location_id/expiry_date) and
+    // the human-readable identifiers the check-in UI naturally has
+    // (typeName/locationCode/expiryDate). The latter is resolved server-side,
+    // consistent with GET /items/next-code which already resolves by code.
+    const body = (req.body ?? {}) as Record<string, any>;
+    const { type_id, typeName, location_id, locationCode, attributes } = body;
+    const expiry_date = body.expiry_date ?? body.expiryDate ?? null;
 
-    if (!type_id || typeof type_id !== 'string') {
-      return res.status(400).json({ error: 'type_id required' });
-    }
-    if (!location_id || typeof location_id !== 'string') {
-      return res.status(400).json({ error: 'location_id required' });
-    }
     if (!isPlainObject(attributes)) {
       return res.status(400).json({ error: 'attributes must be an object' });
     }
+    if (!type_id && !typeName) {
+      return res.status(400).json({ error: 'type_id or typeName required' });
+    }
+    if (!location_id && !locationCode) {
+      return res.status(400).json({ error: 'location_id or locationCode required' });
+    }
 
-    // 1. Look up item type (schema + code template).
-    const typeRes = await supabaseServer
+    // 1. Look up item type (by id or name) for its schema + code template.
+    let typeQuery = supabaseServer
       .from('item_types')
-      .select('id, name, code_format_template, attribute_schema')
-      .eq('id', type_id)
-      .maybeSingle();
+      .select('id, name, code_format_template, attribute_schema');
+    typeQuery = type_id ? typeQuery.eq('id', type_id) : typeQuery.eq('name', typeName);
+    const typeRes = await typeQuery.maybeSingle();
     if (typeRes.error || !typeRes.data) {
       return res.status(404).json({ error: 'Unknown item type' });
     }
@@ -281,12 +287,17 @@ router.post('/', requireAuth, async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid attributes', issues });
     }
 
-    // 3. Look up location for code template.
-    const locRes = await supabaseServer
-      .from('locations')
-      .select('id, code')
-      .eq('id', location_id)
-      .maybeSingle();
+    // 3. Look up location (by id, or by code scoped to the caller's clinic)
+    //    for the code template.
+    const clinicId = (req as any).clinic?.clinicId;
+    let locQuery = supabaseServer.from('locations').select('id, code');
+    if (location_id) {
+      locQuery = locQuery.eq('id', location_id);
+    } else {
+      locQuery = locQuery.eq('code', locationCode);
+      if (clinicId) locQuery = locQuery.eq('clinic_id', clinicId);
+    }
+    const locRes = await locQuery.maybeSingle();
     if (locRes.error || !locRes.data) {
       return res.status(404).json({ error: 'Unknown location' });
     }
