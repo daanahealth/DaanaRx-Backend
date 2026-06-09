@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "description": "DaanaRx Backend - API Gateway and microservices",
   "scripts": {
-    "test": "echo \"Run tests within each service directory\" && exit 0"
+    "test": "echo \"Run tests within each service directory\" && exit 0",
+    "test:engine": "node --test tests/engine.test.mjs",
+    "build:consolidated": "tsc -p tsconfig.consolidated.json",
+    "start:consolidated": "node dist-consolidated/consolidated/index.js"
   },
   "keywords": [
     "express",

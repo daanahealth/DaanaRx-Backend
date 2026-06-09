@@ -1,4 +1,10 @@
 services:
+  # Consolidated monolith: a single Express app mounting the auth/inventory/
+  # transaction/notification routers directly (no proxying), under the same
+  # public prefixes. One service = one cold start (vs the old 5), and a single
+  # service fits the free keep-warm budget. The frontend's NEXT_PUBLIC_API_URL
+  # is unchanged (still this gateway URL). The standalone bugs-dashboard is NOT
+  # consolidated (it's accessed directly), so /bugs is no longer on the gateway.
   - type: web
     name: daanahealth-gateway
     runtime: node
@@ -6,8 +12,8 @@ services:
     region: oregon
     branch: main
     autoDeploy: false
-    buildCommand: cd gateway && npm install && npm run build
-    startCommand: cd gateway && npm start
+    buildCommand: npm install && npm run build:consolidated
+    startCommand: npm run start:consolidated
     healthCheckPath: /health
     envVars:
       - key: PORT
@@ -16,16 +22,14 @@ services:
         value: production
       - key: ALLOWED_ORIGINS
         sync: false
-      - key: AUTH_SERVICE_URL
-        value: https://daanahealth-auth.onrender.com
-      - key: INVENTORY_SERVICE_URL
-        value: https://daanahealth-inventory.onrender.com
-      - key: TRANSACTION_SERVICE_URL
-        value: https://daanahealth-transaction.onrender.com
-      - key: NOTIFICATION_SERVICE_URL
-        value: https://daanahealth-notification.onrender.com
-      - key: BUGS_SERVICE_URL
-        value: https://daanahealth-bugs.onrender.com
+      - key: JWT_SECRET
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
 
   - type: web
     name: daanahealth-auth
