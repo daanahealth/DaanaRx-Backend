@@ -359,13 +359,19 @@ router.post('/', requireAuth, async (req: Request, res: Response) => {
 router.get('/', requireAuth, async (req: Request, res: Response) => {
   try {
     const q = (req.query.q as string | undefined) ?? undefined;
-    const status = ((req.query.status as string | undefined) ?? 'active') as ItemStatus;
+    // `status` may be a single value or a comma-separated list (e.g. the
+    // superadmin checkout search requests "active,expired"). Split + use .in().
+    const statuses = ((req.query.status as string | undefined) ?? 'active')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
     const locationId = req.query.location_id as string | undefined;
     const typeId = req.query.type_id as string | undefined;
     const expiryBefore = req.query.expiry_before as string | undefined;
     const limit = Math.min(parseInt((req.query.limit as string) || '50', 10) || 50, 200);
 
-    let query = supabaseServer.from('items').select(ITEM_COLUMNS).eq('status', status);
+    let query = supabaseServer.from('items').select(ITEM_COLUMNS);
+    query = statuses.length > 1 ? query.in('status', statuses) : query.eq('status', statuses[0] ?? 'active');
 
     if (typeId) query = query.eq('type_id', typeId);
     if (locationId) query = query.eq('location_id', locationId);
