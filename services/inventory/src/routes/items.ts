@@ -59,7 +59,8 @@ const ITEM_COLUMNS = `
   last_edited_by,
   removed_at,
   removed_by,
-  removed_reason
+  removed_reason,
+  location:locations(code)
 `;
 
 // ---------------------------------------------------------------------------
