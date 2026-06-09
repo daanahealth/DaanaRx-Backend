@@ -42,8 +42,18 @@ import reportsRoutes, { transactionLogRoutes } from '../services/transaction/src
 // Notification
 import feedbackRoutes from '../services/notification/src/routes/feedback';
 
+// Make any boot failure loud and fast (instead of a silent port-scan timeout).
+process.on('uncaughtException', (err) => {
+  console.error('[fatal] uncaughtException during boot:', err);
+  process.exit(1);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('[fatal] unhandledRejection during boot:', err);
+});
+console.log(`[boot] consolidated api starting — node ${process.version}, PORT=${process.env.PORT}`);
+
 const app = express();
-const PORT = process.env.PORT || 4000;
+const PORT = Number(process.env.PORT) || 4000;
 
 const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
   'http://localhost:3000',
@@ -89,7 +99,7 @@ app.use('/notifications', feedbackRoutes);
 
 app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
 
-app.listen(PORT, () =>
+app.listen(PORT, '0.0.0.0', () =>
   console.log(`Daana consolidated API running on port ${PORT}
   /auth/*           (auth + invitations)
   /inventory/*      (drugs, locations, lots, units, items, settings, stats)
