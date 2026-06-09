@@ -72,7 +72,7 @@ router.get('/next-code', requireAuth, async (req: Request, res: Response) => {
     const counterRes = await supabaseServer
       .from('code_counters')
       .select('next_value')
-      .eq('type_id', typeRes.data.id)
+      .eq('item_type_id', typeRes.data.id)
       .eq('location_code', locRes.data.code)
       .maybeSingle();
     if (counterRes.error) return res.status(500).json({ error: counterRes.error.message });
