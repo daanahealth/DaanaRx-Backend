@@ -83,6 +83,40 @@ router.post('/signin', async (req: Request, res: Response) => {
   }
 });
 
+// Change the signed-in user's password. Verifies the current password by
+// attempting a sign-in, then updates via the admin API. Client path through
+// the gateway: POST /auth/account/password.
+router.post('/account/password', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'currentPassword and newPassword are required' });
+    }
+    if (typeof newPassword !== 'string' || newPassword.length < 8) {
+      return res.status(400).json({ error: 'New password must be at least 8 characters' });
+    }
+    const user = (req as any).user;
+    if (!user?.email || !user?.userId) return res.status(401).json({ error: 'Authentication required' });
+
+    // Verify the current password.
+    const { error: signInError } = await supabaseAuth.auth.signInWithPassword({
+      email: String(user.email).trim().toLowerCase(),
+      password: currentPassword,
+    });
+    if (signInError) return res.status(401).json({ error: 'Current password is incorrect' });
+
+    // Update to the new password.
+    const { error: updateError } = await supabaseServer.auth.admin.updateUserById(user.userId, {
+      password: newPassword,
+    });
+    if (updateError) throw new Error(updateError.message);
+
+    return res.json({ ok: true });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 router.get('/me', requireAuth, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;

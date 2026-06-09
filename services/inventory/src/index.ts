@@ -11,6 +11,7 @@ import itemRoutes from './routes/items';
 // Standalone router for GET /items/next-code. Must mount BEFORE itemRoutes
 // so /items/next-code matches here instead of itemRoutes' GET /:id catch-all.
 import itemsNextCodeRoutes from './routes/items-next-code';
+import settingsRoutes from './routes/settings';
 
 dotenv.config();
 
@@ -35,6 +36,7 @@ app.use('/lots', lotRoutes);
 app.use('/units', unitRoutes);
 app.use('/items', itemsNextCodeRoutes);
 app.use('/items', itemRoutes);
+app.use('/settings', settingsRoutes);
 app.use('/', statsRoutes);
 app.listen(PORT, () => console.log(`Inventory service running on port ${PORT}`));
 
