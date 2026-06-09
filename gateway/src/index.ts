@@ -43,6 +43,14 @@ function isRetryable(err: any): boolean {
   return /socket hang up|ECONN|timeout/i.test(err.message || '');
 }
 
+// Upstream HTTP statuses that mean "the downstream isn't ready" rather than a
+// real application error. On Render's free plan a cold-starting service is
+// fronted by the platform edge, which returns a 502/504 HTML page while the
+// instance boots — that comes back as a normal HTTP *response* (not a socket
+// error), so it must be retried here too. 503 is deliberately excluded: apps
+// (e.g. the bugs dashboard) use it as a legitimate "unavailable" signal.
+const RETRYABLE_STATUS = new Set([502, 504]);
+
 // Exponential backoff with a cap. attempt is 1-based.
 function backoffMs(attempt: number): number {
   return Math.min(PROXY_BACKOFF_BASE_MS * 2 ** (attempt - 1), PROXY_BACKOFF_CAP_MS);
@@ -80,6 +88,9 @@ function makeResilientProxy(target: string, pathPrefix: string) {
     pathRewrite: { [`^${pathPrefix}`]: '' },
     proxyTimeout: PROXY_TIMEOUT_MS,
     timeout: PROXY_TIMEOUT_MS,
+    // We take over the response so a cold-start 5xx from the upstream can be
+    // retried instead of streamed straight back to the client.
+    selfHandleResponse: true,
     on: {
       // Replay the buffered body on each attempt (the original req stream was
       // already drained by express.raw above).
@@ -92,6 +103,29 @@ function makeResilientProxy(target: string, pathPrefix: string) {
           proxyReq.setHeader('content-length', Buffer.byteLength(body));
           proxyReq.write(body);
         }
+      },
+      // Inspect the upstream response: retry cold-start 5xx, otherwise stream
+      // it back verbatim (status, headers, body).
+      proxyRes: (proxyRes: any, req: any, res: any) => {
+        const status: number = proxyRes.statusCode || 0;
+        const attempt: number = req._proxyAttempt || 1;
+        if (
+          RETRYABLE_STATUS.has(status) &&
+          attempt < PROXY_MAX_ATTEMPTS &&
+          !res.headersSent &&
+          !res.writableEnded
+        ) {
+          proxyRes.resume(); // drain & discard the error body, free the socket
+          req._proxyAttempt = attempt + 1;
+          const delay = backoffMs(attempt);
+          console.warn(
+            `[Gateway] ${pathPrefix} -> ${target} upstream ${status} (attempt ${attempt}/${PROXY_MAX_ATTEMPTS}); retrying in ${delay}ms (likely cold start)`
+          );
+          setTimeout(() => proxy(req, res, () => {}), delay);
+          return;
+        }
+        if (!res.headersSent) res.writeHead(status, proxyRes.headers);
+        proxyRes.pipe(res);
       },
       error: (err: any, req: any, res: any) => {
         const attempt: number = req._proxyAttempt || 1;
