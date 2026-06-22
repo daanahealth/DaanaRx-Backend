@@ -15,7 +15,21 @@ jobs:
           node-version: '20'
       - name: Install (incl. devDependencies)
         run: npm install --include=dev
+
       - name: Typecheck + build consolidated monolith
         run: npm run build:consolidated
+
       - name: Engine unit tests (inventory-core)
         run: npm run test:engine
+
+      # Parity with the daana-precommit-backend skill's lint gate. The repo ships
+      # no ESLint config today; this runs ESLint when one is added and otherwise
+      # relies on the strict consolidated tsc above.
+      - name: Lint (ESLint, if configured)
+        run: |
+          if ls .eslintrc* eslint.config.* >/dev/null 2>&1; then
+            npx eslint .
+          else
+            echo "No ESLint config found - skipping (strict tsc covers typing)."
+            echo "Add @typescript-eslint + a config to enforce a real lint gate."
+          fi

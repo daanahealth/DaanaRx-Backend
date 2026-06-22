@@ -42,6 +42,31 @@ exit "$status"
 HOOK_EOF
 
 chmod +x "$HOOK"
+# --- pre-push hook: block direct pushes to main (PR-only workflow) ---
+PUSH_HOOK="$HOOK_DIR/pre-push"
+if [ -f "$PUSH_HOOK" ] && ! grep -q "daana-precommit-backend" "$PUSH_HOOK"; then
+  cp "$PUSH_HOOK" "$PUSH_HOOK.backup.$(date +%s 2>/dev/null || echo bak)" 2>/dev/null || true
+  echo "ℹ️  Backed up existing pre-push hook."
+fi
+cat > "$PUSH_HOOK" <<'PUSH_EOF'
+#!/usr/bin/env bash
+# DaanaRx-Backend pre-push hook (managed by daana-precommit-backend skill).
+# Blocks direct pushes to main so changes go through pull requests.
+# Emergency bypass: git push --no-verify
+set -uo pipefail
+protected="main"
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  if [ "$remote_ref" = "refs/heads/$protected" ]; then
+    echo "❌ Direct push to '$protected' is blocked — open a pull request instead."
+    echo "   Emergency bypass: git push --no-verify"
+    exit 1
+  fi
+done
+exit 0
+PUSH_EOF
+chmod +x "$PUSH_HOOK"
+echo "✅ Installed DaanaRx-Backend pre-push hook (blocks direct pushes to main)."
+
 echo "✅ Installed DaanaRx-Backend pre-commit hook at $HOOK"
 echo "ℹ️  It runs typecheck + engine tests + lint. Run the 'daana-precommit-backend' skill"
 echo "   for the full gate (best-practices review + Supabase advisors) before pushing."
