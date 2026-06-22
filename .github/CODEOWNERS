@@ -1,0 +1,3 @@
+# Every change requires review/approval from the repo owner.
+# Enforced via branch protection (require_code_owner_reviews = true).
+* @rithik-g
