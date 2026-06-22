@@ -130,6 +130,15 @@ DaanaRx-Backend pre-commit gate
 - **Any red** → "Commit blocked", list failing gate(s) and the path to green.
   Do not commit.
 
+## CI & branch protection (daanahealth org)
+
+This repo lives at `github.com/daanahealth/DaanaRx-Backend` (org **daanahealth**, not the
+deprecated hyphenated `daana-health`). `main` is branch-protected: direct pushes
+are blocked and every change merges via pull request, which must pass the
+**`build-and-test`** GitHub Actions check (consolidated typecheck + engine tests + lint — mirroring this gate) and be up to date with
+`main`. Run this skill's full gate (incl. best-practices + Supabase
+advisors) locally before opening the PR.
+
 ## Installing the automatic git hook (optional, recommended)
 
 ```bash
