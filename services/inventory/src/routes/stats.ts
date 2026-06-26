@@ -21,23 +21,49 @@ function formatUnit(unit: any) {
 // GET /stats
 router.get('/stats', requireAuth, async (req: Request, res: Response) => {
   try {
+    // Core inventory platform: read from `items` (the legacy `units` table is
+    // empty post-migration). `items` has no clinic_id, so scope via the clinic's
+    // locations. Counts are over Active units; the response shape is unchanged.
     const clinic = (req as any).clinic;
     const clinicId = clinic.clinicId;
-    const today = new Date();
-    const todayDate = today.toISOString().split('T')[0];
-    const thirtyDays = new Date(); thirtyDays.setDate(thirtyDays.getDate() + 30);
+    const todayDate = new Date().toISOString().split('T')[0];
+    const in30 = new Date(); in30.setDate(in30.getDate() + 30);
+    const in30Date = in30.toISOString().split('T')[0];
     const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-    const [{ count: totalUnits }, { count: expiringSoon }, { count: recentCheckIns }, { count: recentCheckOuts }, { data: allUnits }] = await Promise.all([
-      supabaseServer.from('units').select('*', { count: 'exact', head: true }).eq('clinic_id', clinicId).gt('available_quantity', 0),
-      supabaseServer.from('units').select('*', { count: 'exact', head: true }).eq('clinic_id', clinicId).gte('expiry_date', todayDate).lte('expiry_date', thirtyDays.toISOString().split('T')[0]).gt('available_quantity', 0),
-      supabaseServer.from('transactions').select('*', { count: 'exact', head: true }).eq('clinic_id', clinicId).eq('type', 'check_in').gte('timestamp', sevenDaysAgo.toISOString()),
-      supabaseServer.from('transactions').select('*', { count: 'exact', head: true }).eq('clinic_id', clinicId).eq('type', 'check_out').gte('timestamp', sevenDaysAgo.toISOString()),
-      supabaseServer.from('units').select('total_quantity, available_quantity').eq('clinic_id', clinicId).gt('available_quantity', 0),
-    ]);
+    const { data: locRows } = await supabaseServer
+      .from('locations')
+      .select('location_id, capacity')
+      .eq('clinic_id', clinicId);
+    const locIds = (locRows || []).map((l: any) => l.location_id);
+    if (locIds.length === 0) {
+      return res.json({ totalUnits: 0, unitsExpiringSoon: 0, recentCheckIns: 0, recentCheckOuts: 0, lowStockAlerts: 0 });
+    }
 
-    const lowStockAlerts = (allUnits || []).filter((u: any) => u.available_quantity < u.total_quantity * 0.1).length;
-    res.json({ totalUnits: totalUnits || 0, unitsExpiringSoon: expiringSoon || 0, recentCheckIns: recentCheckIns || 0, recentCheckOuts: recentCheckOuts || 0, lowStockAlerts });
+    const [{ count: totalUnits }, { count: expiringSoon }, checkIns, checkOuts, { data: activeRows }] =
+      await Promise.all([
+        supabaseServer.from('items').select('id', { count: 'exact', head: true }).in('location_id', locIds).eq('status', 'active'),
+        supabaseServer.from('items').select('id', { count: 'exact', head: true }).in('location_id', locIds).eq('status', 'active').gte('expiry_date', todayDate).lte('expiry_date', in30Date),
+        supabaseServer.from('transactions').select('item:items!inner(location_id)').eq('action', 'check_in').gte('created_at', sevenDaysAgo.toISOString()),
+        supabaseServer.from('transactions').select('item:items!inner(location_id)').eq('action', 'check_out').gte('created_at', sevenDaysAgo.toISOString()),
+        supabaseServer.from('items').select('location_id').in('location_id', locIds).eq('status', 'active'),
+      ]);
+
+    const locSet = new Set(locIds);
+    const recentCheckIns = (checkIns.data || []).filter((t: any) => locSet.has(t.item?.location_id)).length;
+    const recentCheckOuts = (checkOuts.data || []).filter((t: any) => locSet.has(t.item?.location_id)).length;
+
+    // Capacity alert per MVP spec (bin at >= 90% of capacity); reuses the
+    // existing `lowStockAlerts` dashboard field.
+    const capByLoc = new Map<string, number>((locRows || []).map((l: any) => [l.location_id, l.capacity ?? 50]));
+    const countByLoc = new Map<string, number>();
+    (activeRows || []).forEach((i: any) => countByLoc.set(i.location_id, (countByLoc.get(i.location_id) || 0) + 1));
+    let lowStockAlerts = 0;
+    for (const [loc, cnt] of countByLoc) {
+      if (cnt >= (capByLoc.get(loc) ?? 50) * 0.9) lowStockAlerts++;
+    }
+
+    res.json({ totalUnits: totalUnits || 0, unitsExpiringSoon: expiringSoon || 0, recentCheckIns, recentCheckOuts, lowStockAlerts });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
