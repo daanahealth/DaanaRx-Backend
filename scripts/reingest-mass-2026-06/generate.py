@@ -138,10 +138,12 @@ def main():
     w("")
     w("-- 1. Ensure the specialty-bin locations exist for this clinic.")
     for code, label in sorted(locations.items()):
+        # `temp` is a constrained storage-temp field (must be 'room temp'); the
+        # bin's identity is its `code`/`name`. (Specialty label for reference: {label})
         w(
             "INSERT INTO locations (name, temp, clinic_id, item_type_id, capacity) "
-            f"VALUES ({q(code)}, {q(label)}, {q(CLINIC_ID)}, {q(MASS_TYPE_ID)}, 100) "
-            "ON CONFLICT (code) DO NOTHING;"
+            f"VALUES ({q(code)}, 'room temp', {q(CLINIC_ID)}, {q(MASS_TYPE_ID)}, 100) "
+            f"ON CONFLICT (code) DO NOTHING;  -- {label}"
         )
     w("")
     w("-- 2. Remove the clinic's current items (FK order: cart_items, transactions, items).")
