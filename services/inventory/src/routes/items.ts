@@ -27,6 +27,7 @@ import { supabaseServer } from '../utils/supabase';
 import type { ItemStatus, TransactionAction } from '@daana-health/inventory-core';
 import { assertTransition, InvalidStatusTransitionError } from '@daana-health/inventory-core';
 import { renderCodeTemplate } from '@daana-health/inventory-core';
+import { deriveMassCodeAttributes } from '../utils/mass-codes';
 
 const router = Router();
 
@@ -307,7 +308,24 @@ router.post('/', requireAuth, async (req: Request, res: Response) => {
     // 4. Atomically allocate the next counter for this (type, location).
     const counter = await allocateNextCounter(itemType.id, location.code);
 
-    // 5. Render unit_code from the type's template.
+    // 5. For MASS medications, derive the specialty-based code fields the new
+    //    DRX template needs (specialty_code/num + med/dose initials) from the
+    //    location bin + attributes, and merge them into what we render + persist.
+    //    Mirrors @daana-health/domain-mass/specialty-codes. No-op for templates
+    //    that don't reference {attr.*}.
+    const renderAttributes =
+      itemType.name === 'medication'
+        ? {
+            ...attributes,
+            ...deriveMassCodeAttributes({
+              specialtyBin: location.code,
+              medicationName: String((attributes as any).medication_name ?? ''),
+              dosage: String((attributes as any).dosage ?? ''),
+            }),
+          }
+        : attributes;
+
+    // 6. Render unit_code from the type's template.
     let unitCode: string;
     try {
       unitCode = renderCodeTemplate(itemType.code_format_template, {
@@ -315,13 +333,13 @@ router.post('/', requireAuth, async (req: Request, res: Response) => {
         itemTypeName: itemType.name,
         locationCode: location.code,
         counter,
-        attributes,
+        attributes: renderAttributes,
       });
     } catch (err: any) {
       return res.status(500).json({ error: `Code template render failed: ${err.message}` });
     }
 
-    // 6. Insert item with status='active'.
+    // 7. Insert item with status='active'.
     const actor = actorId(req);
     const insertRes = await supabaseServer
       .from('items')
@@ -331,7 +349,7 @@ router.post('/', requireAuth, async (req: Request, res: Response) => {
         location_id: location.id,
         expiry_date: expiry_date ?? null,
         unit_code: unitCode,
-        attributes,
+        attributes: renderAttributes,
         created_by: actor,
       })
       .select(ITEM_COLUMNS)

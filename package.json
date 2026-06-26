@@ -5,6 +5,7 @@
   "scripts": {
     "test": "echo \"Run tests within each service directory\" && exit 0",
     "test:engine": "node --test tests/engine.test.mjs",
+    "test:codes": "node --test tests/mass-codes.test.mjs",
     "build:consolidated": "tsc -p tsconfig.consolidated.json",
     "start:consolidated": "node dist-consolidated/consolidated/index.js"
   },
