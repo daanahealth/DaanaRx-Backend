@@ -44,14 +44,18 @@ router.get('/stats', requireAuth, async (req: Request, res: Response) => {
       await Promise.all([
         supabaseServer.from('items').select('id', { count: 'exact', head: true }).in('location_id', locIds).eq('status', 'active'),
         supabaseServer.from('items').select('id', { count: 'exact', head: true }).in('location_id', locIds).eq('status', 'active').gte('expiry_date', todayDate).lte('expiry_date', in30Date),
-        supabaseServer.from('transactions').select('item:items!inner(location_id)').eq('action', 'check_in').gte('created_at', sevenDaysAgo.toISOString()),
-        supabaseServer.from('transactions').select('item:items!inner(location_id)').eq('action', 'check_out').gte('created_at', sevenDaysAgo.toISOString()),
+        // `transactions` has no FK to `items` (legacy+core merged table), so we
+        // can't embed/join. Read the item's location from the transaction's
+        // new_value snapshot and scope to the clinic's locations in-app.
+        supabaseServer.from('transactions').select('new_value').eq('action', 'check_in').gte('created_at', sevenDaysAgo.toISOString()),
+        supabaseServer.from('transactions').select('new_value').eq('action', 'check_out').gte('created_at', sevenDaysAgo.toISOString()),
         supabaseServer.from('items').select('location_id').in('location_id', locIds).eq('status', 'active'),
       ]);
 
     const locSet = new Set(locIds);
-    const recentCheckIns = (checkIns.data || []).filter((t: any) => locSet.has(t.item?.location_id)).length;
-    const recentCheckOuts = (checkOuts.data || []).filter((t: any) => locSet.has(t.item?.location_id)).length;
+    const txLoc = (t: any) => (t?.new_value as any)?.location_id;
+    const recentCheckIns = (checkIns.data || []).filter((t: any) => locSet.has(txLoc(t))).length;
+    const recentCheckOuts = (checkOuts.data || []).filter((t: any) => locSet.has(txLoc(t))).length;
 
     // Capacity alert per MVP spec (bin at >= 90% of capacity); reuses the
     // existing `lowStockAlerts` dashboard field.

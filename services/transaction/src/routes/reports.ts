@@ -68,6 +68,33 @@ function pluckMedFields(attributes: Record<string, unknown> | null | undefined):
 }
 
 /**
+ * The `transactions` table has no foreign key to `items` (it's a legacy+core
+ * merged table — PK `transaction_id`, no `item_id -> items.id` FK), so PostgREST
+ * cannot embed `items` onto a transaction ("Could not find a relationship…").
+ * Every transaction already snapshots the item in new_value/old_value, so read
+ * the item from there. This is also more robust — the snapshot survives even if
+ * the underlying item row is later edited or removed.
+ */
+function itemFromTx(row: any): {
+  item_id: string | null;
+  unit_code: string | null;
+  medication_name: string | null;
+  dose: string | null;
+  form: string | null;
+  location: { code: string | null; specialty: string | null } | null;
+} | null {
+  const snap = (row?.new_value ?? row?.old_value) as Record<string, any> | null;
+  if (!snap || typeof snap !== 'object') return null;
+  const loc = snap.location as Record<string, any> | undefined;
+  return {
+    item_id: snap.id ?? row?.item_id ?? null,
+    unit_code: snap.unit_code ?? null,
+    ...pluckMedFields(snap.attributes),
+    location: loc ? { code: loc.code ?? null, specialty: loc.specialty ?? null } : null,
+  };
+}
+
+/**
  * Diff two JSONB blobs (typically items.attributes or a status object) into
  * a list of field-level changes for the /reports/inventory-edits payload.
  */
@@ -240,7 +267,7 @@ router.get('/high-use', requireAuth, async (_req: Request, res: Response) => {
     const since = daysFromNow(-30);
     const { data, error } = await supabaseServer
       .from('transactions')
-      .select('id, item_id, created_at, item:items(attributes)')
+      .select('transaction_id, item_id, created_at, new_value, old_value')
       .eq('action', 'check_out')
       .gte('created_at', since);
     if (error) throw new Error(error.message);
@@ -250,7 +277,7 @@ router.get('/high-use', requireAuth, async (_req: Request, res: Response) => {
       { count: number; sample_dose: string | null; sample_form: string | null }
     >();
     for (const row of (data as any[]) || []) {
-      const med = pluckMedFields(row.item?.attributes);
+      const med = pluckMedFields((row.new_value ?? row.old_value)?.attributes);
       const key = med.medication_name || '(unknown)';
       const cur = buckets.get(key);
       if (cur) {
@@ -323,10 +350,7 @@ router.get('/inventory-edits', requireAuth, async (_req: Request, res: Response)
     const since = daysFromNow(-30);
     const { data, error } = await supabaseServer
       .from('transactions')
-      .select(
-        `id, action, created_at, actor_id, old_value, new_value, reason, note,
-         item:items(id, unit_code, attributes, location:locations(code, specialty))`,
-      )
+      .select('transaction_id, action, created_at, actor_id, old_value, new_value, reason, note, item_id')
       .eq('action', 'edit')
       .gte('created_at', since)
       .order('created_at', { ascending: false })
@@ -336,21 +360,12 @@ router.get('/inventory-edits', requireAuth, async (_req: Request, res: Response)
     res.json({
       count: data?.length ?? 0,
       edits: (data || []).map((row: any) => ({
-        transaction_id: row.id,
+        transaction_id: row.transaction_id,
         timestamp: row.created_at,
         actor_id: row.actor_id,
         reason: row.reason,
         note: row.note,
-        item: row.item
-          ? {
-              item_id: row.item.id,
-              unit_code: row.item.unit_code,
-              ...pluckMedFields(row.item.attributes),
-              location: row.item.location
-                ? { code: row.item.location.code, specialty: row.item.location.specialty }
-                : null,
-            }
-          : null,
+        item: itemFromTx(row),
         changes: diffValues(row.old_value, row.new_value),
       })),
     });
@@ -373,9 +388,7 @@ router.get('/recently-checked-out', requireAuth, async (_req: Request, res: Resp
   try {
     const sevenDays = daysFromNow(-7);
 
-    const sel = `id, action, created_at, actor_id, reason, note,
-                 item:items(id, unit_code, attributes,
-                            location:locations(code, specialty))`;
+    const sel = `transaction_id, action, created_at, actor_id, reason, note, item_id, new_value, old_value`;
 
     const { data: weekRows, error: weekErr } = await supabaseServer
       .from('transactions')
@@ -400,21 +413,12 @@ router.get('/recently-checked-out', requireAuth, async (_req: Request, res: Resp
     res.json({
       count: rows.length,
       transactions: rows.map((row: any) => ({
-        transaction_id: row.id,
+        transaction_id: row.transaction_id,
         timestamp: row.created_at,
         actor_id: row.actor_id,
         reason: row.reason,
         note: row.note,
-        item: row.item
-          ? {
-              item_id: row.item.id,
-              unit_code: row.item.unit_code,
-              ...pluckMedFields(row.item.attributes),
-              location: row.item.location
-                ? { code: row.item.location.code, specialty: row.item.location.specialty }
-                : null,
-            }
-          : null,
+        item: itemFromTx(row),
       })),
     });
   } catch (err: any) {
@@ -461,13 +465,9 @@ transactionLogRoutes.get('/', requireAuth, async (req: Request, res: Response) =
 
     let query = supabaseServer
       .from('transactions')
-      .select(
-        `id, action, created_at, actor_id, old_value, new_value, reason, note, item_id,
-         item:items(id, unit_code, attributes,
-                    location:locations(code, specialty))`,
-      )
+      .select('transaction_id, action, created_at, actor_id, old_value, new_value, reason, note, item_id')
       .order('created_at', { ascending: false })
-      .order('id', { ascending: false })
+      .order('transaction_id', { ascending: false })
       .limit(limit + 1); // +1 so we can detect "has more"
 
     if (dateFrom) query = query.gte('created_at', dateFrom);
@@ -505,7 +505,7 @@ transactionLogRoutes.get('/', requireAuth, async (req: Request, res: Response) =
     if (q) {
       const needle = q.toLowerCase();
       rows = rows.filter((r) => {
-        const med = pluckMedFields(r.item?.attributes).medication_name;
+        const med = itemFromTx(r)?.medication_name;
         return typeof med === 'string' && med.toLowerCase().includes(needle);
       });
     }
@@ -515,29 +515,31 @@ transactionLogRoutes.get('/', requireAuth, async (req: Request, res: Response) =
     const nextCursor =
       hasMore && page.length > 0
         ? Buffer.from(
-            JSON.stringify({ ts: page[page.length - 1].created_at, id: page[page.length - 1].id }),
+            JSON.stringify({ ts: page[page.length - 1].created_at, id: page[page.length - 1].transaction_id }),
           ).toString('base64')
         : null;
 
     res.json({
       count: page.length,
       next_cursor: nextCursor,
-      transactions: page.map((row: any) => ({
-        transaction_id: row.id,
-        timestamp: row.created_at,
-        action_type: row.action,
-        ...pluckMedFields(row.item?.attributes),
-        location: row.item?.location
-          ? { code: row.item.location.code, specialty: row.item.location.specialty }
-          : null,
-        drx_code: row.item?.unit_code ?? null,
-        item_id: row.item_id,
-        user: row.actor_id,
-        reason: row.reason,
-        notes: row.note,
-        changes:
-          row.action === 'edit' ? diffValues(row.old_value, row.new_value) : undefined,
-      })),
+      transactions: page.map((row: any) => {
+        const it = itemFromTx(row);
+        return {
+          transaction_id: row.transaction_id,
+          timestamp: row.created_at,
+          action_type: row.action,
+          medication_name: it?.medication_name ?? null,
+          dose: it?.dose ?? null,
+          form: it?.form ?? null,
+          location: it?.location ?? null,
+          drx_code: it?.unit_code ?? null,
+          item_id: row.item_id,
+          user: row.actor_id,
+          reason: row.reason,
+          notes: row.note,
+          changes: row.action === 'edit' ? diffValues(row.old_value, row.new_value) : undefined,
+        };
+      }),
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
