@@ -383,9 +383,12 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
-    const locationId = req.query.location_id as string | undefined;
-    const typeId = req.query.type_id as string | undefined;
-    const expiryBefore = req.query.expiry_before as string | undefined;
+    // Accept both snake_case and the camelCase the inventory UI sends
+    // (locationId / expiryBefore / typeId) — otherwise the Location and Expiry
+    // filters silently no-op because the param names never match.
+    const locationId = (req.query.location_id ?? req.query.locationId) as string | undefined;
+    const typeId = (req.query.type_id ?? req.query.typeId) as string | undefined;
+    const expiryBefore = (req.query.expiry_before ?? req.query.expiryBefore) as string | undefined;
     const limit = Math.min(parseInt((req.query.limit as string) || '50', 10) || 50, 200);
 
     let query = supabaseServer.from('items').select(ITEM_COLUMNS);
@@ -395,8 +398,24 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
     if (locationId) query = query.eq('location_id', locationId);
     if (expiryBefore) query = query.lte('expiry_date', expiryBefore);
     if (q && q.trim().length > 0) {
-      // substring search on attributes->>'medication_name'
-      query = query.ilike('attributes->>medication_name', `%${q.trim()}%`);
+      // Free-text search across the medication's visible fields AND its DRX
+      // code — not just the name (the search box advertises "Medication, code,
+      // or notes…"). Strip characters that would break PostgREST's `or`
+      // grammar (comma separates terms; parens group), then OR an ilike per
+      // field. The OR group is AND-combined with the status/location filters.
+      const term = q.trim().replace(/[(),*]/g, ' ').trim();
+      if (term.length > 0) {
+        const SEARCH_FIELDS = [
+          'unit_code', // DRX code, e.g. DRX-MASS-C1AT4033
+          'attributes->>medication_name',
+          'attributes->>dosage',
+          'attributes->>unit',
+          'attributes->>form',
+          'attributes->>specialty_class',
+          'attributes->>notes',
+        ];
+        query = query.or(SEARCH_FIELDS.map((f) => `${f}.ilike.%${term}%`).join(','));
+      }
     }
 
     // FEFO at the SQL layer: expiry asc nulls last, created asc, unit_code asc.
