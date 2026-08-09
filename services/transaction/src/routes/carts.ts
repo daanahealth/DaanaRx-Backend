@@ -126,7 +126,13 @@ async function getItem(itemId: string) {
   return data;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 async function getCart(cartId: string) {
+  // A non-UUID id can only ever be "not found". Querying anyway makes Postgres
+  // raise 22P02 and surfaces raw `invalid input syntax for type uuid` text to
+  // the user, so short-circuit to a clean 404 instead.
+  if (!UUID_RE.test(cartId)) return null;
   const { data, error } = await supabaseServer
     .from('carts')
     .select('*')
@@ -201,6 +207,21 @@ async function resolveCurrentCart(userId: string): Promise<any> {
     throw new Error(`Failed to auto-create cart: ${createErr?.message}`);
   }
   return created;
+}
+
+/**
+ * Resolve a `:id` path param that may be the literal string "current".
+ *
+ * The cart routes are addressed by uuid, but "current" is the documented alias
+ * for "the caller's open cart" on GET/POST /carts/current*. Accepting it on the
+ * id-addressed routes too means a client that only knows about the alias (or
+ * that failed to read the cart id out of an add response) still hits the right
+ * cart instead of a hard error mid-checkout.
+ */
+async function resolveCartIdParam(param: string, userId: string): Promise<string> {
+  if (param !== 'current') return param;
+  const cart = await resolveCurrentCart(userId);
+  return cart.id;
 }
 
 // ---------------------------------------------------------------------------
@@ -381,6 +402,10 @@ router.post('/current/items', requireAuth, async (req: Request, res: Response) =
 
     res.status(201).json({
       cart_id: cart.id,
+      // Also expose the cart as an object: clients that read `cart.id` used to
+      // get undefined here and fall back to the literal string "current" for
+      // the follow-up approve call, which failed the whole checkout.
+      cart: { id: cart.id, status: cart.status },
       item_id: itemId,
       status: targetStatus,
       added_at: new Date().toISOString(),
@@ -572,6 +597,7 @@ router.post('/:id/items', requireAuth, async (req: Request, res: Response) => {
 
     res.status(201).json({
       cart_id: cartId,
+      cart: { id: cartId, status: cart.status },
       item_id: itemId,
       status: targetStatus,
       added_at: new Date().toISOString(),
@@ -649,7 +675,7 @@ router.delete('/:id/items/:item_id', requireAuth, async (req: Request, res: Resp
 router.post('/:id/submit', requireAuth, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
-    const cart = await getCart(req.params.id);
+    const cart = await getCart(await resolveCartIdParam(req.params.id, user.userId));
     if (!cart) return res.status(404).json({ error: 'Cart not found' });
     if (cart.owner_id !== user.userId) {
       return res.status(403).json({ error: 'Only the cart owner can submit it' });
@@ -701,7 +727,7 @@ router.post('/:id/submit', requireAuth, async (req: Request, res: Response) => {
 router.post('/:id/approve', requireAuth, requireRole('superadmin'), async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
-    const cart = await getCart(req.params.id);
+    const cart = await getCart(await resolveCartIdParam(req.params.id, user.userId));
     if (!cart) return res.status(404).json({ error: 'Cart not found' });
     if (cart.status !== 'active' && cart.status !== 'pending_approval') {
       return res.status(409).json({ error: `Cart is ${cart.status}; cannot approve` });
@@ -783,7 +809,7 @@ router.post('/:id/reject', requireAuth, requireRole('superadmin'), async (req: R
   try {
     const user = (req as any).user;
     const reason: string | undefined = req.body?.reason;
-    const cart = await getCart(req.params.id);
+    const cart = await getCart(await resolveCartIdParam(req.params.id, user.userId));
     if (!cart) return res.status(404).json({ error: 'Cart not found' });
     if (cart.status !== 'active' && cart.status !== 'pending_approval') {
       return res.status(409).json({ error: `Cart is ${cart.status}; cannot reject` });
