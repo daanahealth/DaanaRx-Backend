@@ -27,6 +27,7 @@ import { Router, Request, Response } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { supabaseServer } from '../utils/supabase';
 import { renderCodeTemplate } from '@daana-health/inventory-core';
+import { deriveMassCodeAttributes } from '../utils/mass-codes';
 
 const router = Router();
 
@@ -34,17 +35,26 @@ router.get('/next-code', requireAuth, async (req: Request, res: Response) => {
   try {
     const locationCode = (req.query.location as string | undefined)?.trim();
     const typeIdParam = (req.query.type_id as string | undefined)?.trim();
+    // The specialty-based template renders from the medication's own fields, so
+    // an exact preview needs them. Both are optional: without them the derive
+    // helper falls back to placeholder initials rather than failing.
+    const medicationName = (req.query.medication_name as string | undefined)?.trim() ?? '';
+    const dosage = (req.query.dosage as string | undefined)?.trim() ?? '';
 
     if (!locationCode) {
       return res.status(400).json({ error: 'location (code) query param required' });
     }
 
     // 1. Resolve the location by code so we can also fetch its default type.
-    const locRes = await supabaseServer
+    //    Scoped to the caller's clinic — bin codes (PSYCH1, NSAID2, …) are only
+    //    unique per clinic, so an unscoped lookup can preview another clinic's bin.
+    const clinicId = (req as any).clinic?.clinicId;
+    let locQuery = supabaseServer
       .from('locations')
       .select('id, code, item_type_id, deactivated_at')
-      .eq('code', locationCode)
-      .maybeSingle();
+      .eq('code', locationCode);
+    if (clinicId) locQuery = locQuery.eq('clinic_id', clinicId);
+    const locRes = await locQuery.maybeSingle();
     if (locRes.error) return res.status(500).json({ error: locRes.error.message });
     if (!locRes.data) return res.status(404).json({ error: 'Unknown location code' });
     if (locRes.data.deactivated_at) {
@@ -79,6 +89,21 @@ router.get('/next-code', requireAuth, async (req: Request, res: Response) => {
     const counter: number = counterRes.data?.next_value ?? 1;
 
     // 4. Render via the inventory-core helper for parity with POST /items.
+    //    The medication template is specialty-based
+    //    (DRX-MASS-{attr.specialty_code}{attr.specialty_num}{attr.med_initial}
+    //     {attr.dose_initial}{counter:03d}), so the same attributes POST /items
+    //    merges in must be derived here too. Rendering with `{}` throws
+    //    CodeTemplateError — that produced a "code cannot be generated" error on
+    //    every check-in while POST /items went on to mint a valid code.
+    const renderAttributes =
+      typeRes.data.name === 'medication'
+        ? deriveMassCodeAttributes({
+            specialtyBin: locRes.data.code,
+            medicationName,
+            dosage,
+          })
+        : {};
+
     let unitCode: string;
     try {
       unitCode = renderCodeTemplate(typeRes.data.code_format_template, {
@@ -86,7 +111,7 @@ router.get('/next-code', requireAuth, async (req: Request, res: Response) => {
         itemTypeName: typeRes.data.name,
         locationCode: locRes.data.code,
         counter,
-        attributes: {},
+        attributes: renderAttributes,
       });
     } catch (err: any) {
       return res.status(500).json({ error: `Code template render failed: ${err.message}` });
@@ -97,6 +122,9 @@ router.get('/next-code', requireAuth, async (req: Request, res: Response) => {
       counter,
       location_code: locRes.data.code,
       type_id: typeRes.data.id,
+      // True only when the caller supplied the fields the template reads, i.e.
+      // when this preview will match the code POST /items actually mints.
+      exact: typeRes.data.name !== 'medication' || Boolean(medicationName && dosage),
     });
   } catch (err: any) {
     return res.status(500).json({ error: err.message ?? 'Internal error' });
