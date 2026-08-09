@@ -173,12 +173,21 @@ function validateAttributes(schema: any, value: any, path = 'attributes'): strin
  * Atomically allocate the next code counter for (type_id, location_code).
  *
  * Prefers an RPC `increment_code_counter(p_type_id, p_location_code)`
- * supplied by the new migration (SECURITY DEFINER, single-statement
- * UPDATE ... RETURNING). Falls back to a best-effort upsert+read for
- * environments where the RPC is not yet present — the fallback is NOT
- * race-safe across concurrent writers and is intentionally noisy in logs
- * so it is replaced as soon as the migration lands.
+ * (migrations/004_increment_code_counter.sql — SECURITY DEFINER,
+ * single-statement INSERT ... ON CONFLICT ... RETURNING).
+ *
+ * Fallback for environments where the migration hasn't been applied yet
+ * (production today): a compare-and-swap loop over PostgREST. The UPDATE is
+ * guarded by `.eq('next_value', current)`, so of N concurrent allocators
+ * exactly one matches a row and wins; losers observe 0 updated rows and
+ * retry against the fresh value. First allocation for a (type, location)
+ * races through INSERT, where the table's unique key on
+ * (item_type_id, location_code) makes the loser 23505 and retry. Verified
+ * against live PostgREST: conditional PATCH returns the updated rows only
+ * when the guard matches.
  */
+const COUNTER_CAS_MAX_ATTEMPTS = 8;
+
 async function allocateNextCounter(typeId: string, locationCode: string): Promise<number> {
   const rpc = await supabaseServer.rpc('increment_code_counter', {
     p_type_id: typeId,
@@ -187,35 +196,47 @@ async function allocateNextCounter(typeId: string, locationCode: string): Promis
   if (!rpc.error && typeof rpc.data === 'number') {
     return rpc.data;
   }
-  // Fallback (NOT race-safe — emit a warning so operators notice)
-  // eslint-disable-next-line no-console
-  console.warn(
-    '[items] increment_code_counter RPC unavailable, falling back to non-atomic update. ' +
-      `rpc error: ${rpc.error?.message ?? 'none'}`,
-  );
-  const existing = await supabaseServer
-    .from('code_counters')
-    .select('next_value')
-    .eq('item_type_id', typeId)
-    .eq('location_code', locationCode)
-    .maybeSingle();
-  const current = existing.data?.next_value ?? 1;
-  const updated = await supabaseServer
-    .from('code_counters')
-    .upsert(
-      {
-        item_type_id: typeId,
-        location_code: locationCode,
-        next_value: current + 1,
-      },
-      { onConflict: 'item_type_id,location_code' },
-    )
-    .select('next_value')
-    .single();
-  if (updated.error || !updated.data) {
-    throw new Error(`Failed to allocate counter: ${updated.error?.message}`);
+
+  for (let attempt = 0; attempt < COUNTER_CAS_MAX_ATTEMPTS; attempt++) {
+    const existing = await supabaseServer
+      .from('code_counters')
+      .select('next_value')
+      .eq('item_type_id', typeId)
+      .eq('location_code', locationCode)
+      .maybeSingle();
+    if (existing.error) {
+      throw new Error(`Failed to read counter: ${existing.error.message}`);
+    }
+
+    if (!existing.data) {
+      // No row yet — claim counter 1 by inserting. A concurrent first
+      // allocator loses on the unique key (23505) and retries the loop,
+      // now taking the CAS path.
+      const inserted = await supabaseServer
+        .from('code_counters')
+        .insert({ item_type_id: typeId, location_code: locationCode, next_value: 2 });
+      if (!inserted.error) return 1;
+      if (inserted.error.code === '23505') continue;
+      throw new Error(`Failed to create counter: ${inserted.error.message}`);
+    }
+
+    const current = existing.data.next_value;
+    const updated = await supabaseServer
+      .from('code_counters')
+      .update({ next_value: current + 1 })
+      .eq('item_type_id', typeId)
+      .eq('location_code', locationCode)
+      .eq('next_value', current) // CAS guard — only wins if unchanged
+      .select('next_value');
+    if (updated.error) {
+      throw new Error(`Failed to allocate counter: ${updated.error.message}`);
+    }
+    if ((updated.data ?? []).length === 1) return current;
+    // Lost the race — another writer bumped the counter first. Retry.
   }
-  return current;
+  throw new Error(
+    `Failed to allocate counter for (${typeId}, ${locationCode}) after ${COUNTER_CAS_MAX_ATTEMPTS} attempts`,
+  );
 }
 
 async function insertTransaction(
