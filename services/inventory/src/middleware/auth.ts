@@ -71,3 +71,29 @@ export function requireRole(...roles: string[]) {
     next();
   };
 }
+
+/**
+ * Deny specific roles, allowing everyone else.
+ *
+ * Deliberately a deny-list rather than an allow-list. Stock-editing routes have
+ * historically been open to any authenticated user, and the clinic's volunteers
+ * and interns hold assorted roles — switching those routes to
+ * `requireRole('admin','superadmin')` would silently lock existing staff out of
+ * check-in. Denying only the new, intentionally read-only roles keeps every
+ * current account working.
+ */
+export function denyRole(...roles: string[]) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const user = (req as any).user;
+    if (user && roles.includes(user.userRole)) {
+      res.status(403).json({
+        error: 'This account can browse inventory and request medications, but cannot modify stock.',
+      });
+      return;
+    }
+    next();
+  };
+}
+
+/** Roles that may read inventory and raise requests, but never mutate stock. */
+export const READ_ONLY_ROLES = ['provider'] as const;
