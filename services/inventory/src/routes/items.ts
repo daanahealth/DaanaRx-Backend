@@ -22,7 +22,7 @@
 // lots/drugs routes; consumer migration is handled separately.
 
 import { Router, Request, Response } from 'express';
-import { requireAuth } from '../middleware/auth';
+import { requireAuth, denyRole, READ_ONLY_ROLES } from '../middleware/auth';
 import { supabaseServer } from '../utils/supabase';
 import type { ItemStatus, TransactionAction } from '@daana-health/inventory-core';
 import { assertTransition, InvalidStatusTransitionError } from '@daana-health/inventory-core';
@@ -273,7 +273,7 @@ function actorId(req: Request): string | null {
 // POST /items  — Check in
 // ---------------------------------------------------------------------------
 
-router.post('/', requireAuth, async (req: Request, res: Response) => {
+router.post('/', requireAuth, denyRole(...READ_ONLY_ROLES), async (req: Request, res: Response) => {
   try {
     // Accept BOTH the id-based contract (type_id/location_id/expiry_date) and
     // the human-readable identifiers the check-in UI naturally has
@@ -505,7 +505,7 @@ router.get('/:id', requireAuth, async (req: Request, res: Response) => {
  */
 const EDITABLE_ATTR_KEYS = ['medication_name', 'dosage', 'unit', 'form', 'quantity', 'notes'] as const;
 
-router.patch('/:id', requireAuth, async (req: Request, res: Response) => {
+router.patch('/:id', requireAuth, denyRole(...READ_ONLY_ROLES), async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -592,7 +592,7 @@ router.patch('/:id', requireAuth, async (req: Request, res: Response) => {
 // POST /items/:id/remove  — Soft delete
 // ---------------------------------------------------------------------------
 
-router.post('/:id/remove', requireAuth, async (req: Request, res: Response) => {
+router.post('/:id/remove', requireAuth, denyRole(...READ_ONLY_ROLES), async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { reason, note } = (req.body ?? {}) as { reason?: string; note?: string };
